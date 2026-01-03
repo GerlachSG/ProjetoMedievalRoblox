@@ -114,7 +114,7 @@ local SUAVIDADE_TRANSICAO_CORRENDO = SUAVIDADE_TRANSICAO_DIRECAO * 2 -- Transiç
 local animacaoMovPausada = false -- Se a animação está pausada (parado)
 local ultimaAnimacaoMovNome = nil -- Nome da última animação de movimento
 local TEMPO_MANTER_ANIMACAO = 0.2 -- Tempo para manter animação pausada antes de realmente parar
-local VELOCIDADE_PAUSA = 0.15 -- Velocidade durante pausa (mantém movimento sutil)
+local VELOCIDADE_PAUSA = 0.2 -- Velocidade durante pausa (mantém movimento sutil)
 local timerPararAnimacao = nil -- Timer para parar a animação após tempo
 
 -- Animações que usam sistema de direção reversa
@@ -369,6 +369,112 @@ function _G.EstaComboAtivo()
 end
 
 -- ═══════════════════════════════════════════════════════════════════
+-- SISTEMA DE ANIMAÇÃO DE EQUIPAR/DESEQUIPAR REVERSÍVEL
+-- ═══════════════════════════════════════════════════════════════════
+
+-- Estado da animação de equipar/desequipar
+local equipAnimState = {
+	animacao = nil, -- AnimationTrack atual
+	direcao = 0, -- 1 = equipando, -1 = desequipando
+	modoAlvo = nil, -- Modo para o qual está equipando
+	conexaoTermino = nil, -- Conexão para detectar término
+	conexaoMonitor = nil, -- Conexão para monitorar TimePosition (quando velocidade negativa)
+	tempoInicio = 0, -- Tempo quando a animação iniciou (para calcular progresso)
+}
+
+--- Callback para quando a animação de equipar/desequipar termina
+local function OnEquipAnimacaoTerminou()
+	local direcaoFinal = equipAnimState.direcao
+
+	-- Limpa estado
+	if equipAnimState.conexaoTermino then
+		equipAnimState.conexaoTermino:Disconnect()
+		equipAnimState.conexaoTermino = nil
+	end
+	if equipAnimState.conexaoMonitor then
+		equipAnimState.conexaoMonitor:Disconnect()
+		equipAnimState.conexaoMonitor = nil
+	end
+	equipAnimState.animacao = nil
+	equipAnimState.direcao = 0
+	equipAnimState.modoAlvo = nil
+
+	-- Notifica EntradaJogador que a animação terminou
+	if _G.OnEquipAnimacaoTerminou then
+		_G.OnEquipAnimacaoTerminou(direcaoFinal)
+	end
+
+	-- Atualiza animação de movimento
+	AtualizarAnimacaoMovimento()
+
+	print("[ControladorEstado] Animação de equipar/desequipar terminou (direção:", direcaoFinal, ")")
+end
+
+--- Monitora o TimePosition da animação quando está tocando em velocidade negativa
+--- Detecta quando chega ao início (TimePosition <= 0) para parar a animação
+local function IniciarMonitoramentoReversao()
+	-- Remove monitor anterior se existir
+	if equipAnimState.conexaoMonitor then
+		equipAnimState.conexaoMonitor:Disconnect()
+	end
+
+	equipAnimState.conexaoMonitor = RunService.RenderStepped:Connect(function()
+		if not equipAnimState.animacao or not equipAnimState.animacao.IsPlaying then
+			-- Animação parou, limpa monitor
+			if equipAnimState.conexaoMonitor then
+				equipAnimState.conexaoMonitor:Disconnect()
+				equipAnimState.conexaoMonitor = nil
+			end
+			return
+		end
+
+		-- Se está tocando em velocidade negativa e chegou ao início
+		if equipAnimState.direcao == -1 and equipAnimState.animacao.TimePosition <= 0.01 then
+			-- Para a animação manualmente
+			equipAnimState.animacao:Stop(0.1)
+			-- O callback OnEquipAnimacaoTerminou será chamado pelo Stopped event
+		end
+	end)
+end
+
+--- Inverte a direção da animação de equipar/desequipar
+--- @param novaDirecao number 1 para equipar, -1 para desequipar
+function _G.InverterEquipAnimacao(novaDirecao: number)
+	if not equipAnimState.animacao or not equipAnimState.animacao.IsPlaying then
+		print("[ControladorEstado] Não há animação de equip ativa para inverter")
+		return false
+	end
+
+	-- Inverte a velocidade
+	equipAnimState.direcao = novaDirecao
+	equipAnimState.animacao:AdjustSpeed(novaDirecao)
+
+	-- Se a nova direção é negativa, inicia monitoramento para detectar quando chegar ao início
+	if novaDirecao == -1 then
+		IniciarMonitoramentoReversao()
+	else
+		-- Se voltou para positivo, remove o monitor
+		if equipAnimState.conexaoMonitor then
+			equipAnimState.conexaoMonitor:Disconnect()
+			equipAnimState.conexaoMonitor = nil
+		end
+	end
+
+	print("[ControladorEstado] Animação de equip invertida para direção:", novaDirecao)
+	return true
+end
+
+--- Verifica se está em animação de equipar/desequipar
+function _G.EstaEmAnimacaoEquip()
+	return equipAnimState.animacao ~= nil and equipAnimState.animacao.IsPlaying
+end
+
+--- Obtém a direção atual da animação de equip (1, -1 ou 0)
+function _G.ObterDirecaoEquip()
+	return equipAnimState.direcao
+end
+
+-- ═══════════════════════════════════════════════════════════════════
 -- FUNÇÕES DE ANIMAÇÃO
 -- ═══════════════════════════════════════════════════════════════════
 
@@ -596,6 +702,7 @@ end
 
 --- Toca animação de ação
 --- Para animações de combo (AtaqueLeve), configura sistema de marcadores
+--- Para animações de equipar/desequipar, configura sistema de animação reversível
 ---@param animId string ID da animação
 ---@param loop boolean Se a animação deve loopar
 ---@param velocidade number Velocidade inicial da animação
@@ -603,6 +710,16 @@ end
 local function TocarAnimacaoAcao(animId: string, loop: boolean, velocidade: number, nomeAnimacao: string?)
 	local track = ObterAnimacao(animId)
 	if not track then
+		return
+	end
+
+	-- Verifica se é animação de equipar/desequipar
+	local ehEquipar = nomeAnimacao and (nomeAnimacao == "Equipar" or nomeAnimacao == "Desequipar")
+
+	-- Se é equipar/desequipar e já tem uma animação de equip tocando, não para - vai inverter depois
+	if ehEquipar and equipAnimState.animacao and equipAnimState.animacao.IsPlaying then
+		-- A inversão será feita pelo sistema de InverterEquipAnimacao
+		-- Não inicia nova animação
 		return
 	end
 
@@ -614,6 +731,32 @@ local function TocarAnimacaoAcao(animId: string, loop: boolean, velocidade: numb
 	track:AdjustSpeed(velocidade)
 
 	animacaoAtualAcao = track
+
+	-- Configura sistema de equipar/desequipar reversível
+	if ehEquipar then
+		-- Limpa conexão anterior se existir
+		if equipAnimState.conexaoTermino then
+			equipAnimState.conexaoTermino:Disconnect()
+		end
+		if equipAnimState.conexaoMonitor then
+			equipAnimState.conexaoMonitor:Disconnect()
+			equipAnimState.conexaoMonitor = nil
+		end
+
+		equipAnimState.animacao = track
+		-- Direção sempre começa como 1 (positiva) - animação toca normalmente
+		-- Será -1 apenas se invertida via _G.InverterEquipAnimacao
+		equipAnimState.direcao = 1
+		equipAnimState.tempoInicio = tick()
+
+		-- Conecta callback de término
+		equipAnimState.conexaoTermino = track.Stopped:Connect(function()
+			OnEquipAnimacaoTerminou()
+		end)
+
+		print("[ControladorEstado] Animação de", nomeAnimacao, "iniciada")
+		return
+	end
 
 	-- Verifica se é uma animação de combo para configurar markers
 	local ehCombo = nomeAnimacao and (nomeAnimacao == "AtaqueLeve" or nomeAnimacao:match("^AtaqueLeve"))

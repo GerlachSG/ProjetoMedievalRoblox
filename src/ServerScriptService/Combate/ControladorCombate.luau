@@ -787,6 +787,45 @@ function ControladorCombate.ProcessarDesequipar(entidade: Model)
 	return true
 end
 
+--- Processa inversão de animação de equipar/desequipar
+--- Chamado quando o jogador toggle rapidamente entre equipar e desequipar
+--- O cliente cuida de inverter a animação, aqui só atualizamos o estado
+--- @param entidade Model
+--- @param dados table { direcao: number, modo: string? }
+function ControladorCombate.ProcessarInverterEquipAnimacao(entidade: Model, dados: { direcao: number, modo: string? })
+	local maquina = ControladorCombate.ObterMaquina(entidade)
+
+	local direcao = dados.direcao
+	local modo = dados.modo
+
+	print(string.format("[Combate] %s: Invertendo animação para direção %d", entidade.Name, direcao))
+
+	if direcao == 1 then
+		-- Inverteu de desequipando para equipando
+		-- Define o modo alvo
+		if modo then
+			maquina:DefinirModo(modo)
+		end
+	else
+		-- Inverteu de equipando para desequipando
+		-- Define modo Base após animação
+		task.delay(0.1, function()
+			maquina:DefinirModo("Base")
+			ControladorCombate._SincronizarEstado(entidade)
+		end)
+	end
+
+	-- O cliente vai inverter a animação, só precisamos completar a ação depois
+	-- O tempo é variável dependendo de onde a animação estava, então usamos callback
+	-- Por enquanto, usamos delay padrão (pode ser melhorado depois)
+	task.delay(0.5, function()
+		maquina:CompletarAcao()
+		ControladorCombate._SincronizarEstado(entidade)
+	end)
+
+	return true
+end
+
 --- Processa mudança de shift lock
 function ControladorCombate.ProcessarShiftLock(entidade: Model, ativo: boolean)
 	local maquina = ControladorCombate.ObterMaquina(entidade)
@@ -911,6 +950,9 @@ local MapaAcoes = {
 		return ControladorCombate.ProcessarEquipar(entidade, dados)
 	end,
 	Desequipar = ControladorCombate.ProcessarDesequipar,
+	InverterEquipAnimacao = function(entidade, dados)
+		return ControladorCombate.ProcessarInverterEquipAnimacao(entidade, dados)
+	end,
 
 	-- Ações de combo por marcadores
 	ComboHitbox = function(entidade, dados)

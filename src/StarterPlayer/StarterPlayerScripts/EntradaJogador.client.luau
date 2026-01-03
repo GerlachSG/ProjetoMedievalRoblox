@@ -39,8 +39,6 @@ local Configuracao = {
 	TeclaAgachar = Enum.KeyCode.C,
 	TeclaCorrer = Enum.KeyCode.LeftShift,
 	TeclaQuebrarDefesa = Enum.KeyCode.G,
-	TeclaEquipar1 = Enum.KeyCode.One,
-	TeclaEquipar2 = Enum.KeyCode.Two,
 }
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -57,14 +55,26 @@ local estadoInput = {
 }
 
 -- Estado de equipamento
-local _modoAtual = "Base" -- Modo de combate atual (lido do Status) - reservado para uso futuro
-local equipBusy = false -- Evita spam de equipar/desequipar
+local toolAtualEquipado = nil -- Referência ao Tool atualmente equipado
+local ultimoToolProcessado = nil -- Último tool que iniciou equip/desequip (para rastrear toggle)
+local direcaoEquip = 0 -- 1 = equipando, -1 = desequipando, 0 = nenhum
 
--- Mapa de tecla para modo
-local MapaTeclaModo = {
-	[Enum.KeyCode.One] = "Punhos",
-	[Enum.KeyCode.Two] = "UmaMaoEscudo",
-}
+-- ═══════════════════════════════════════════════════════════════════
+-- CALLBACKS GLOBAIS
+-- ═══════════════════════════════════════════════════════════════════
+
+--- Callback chamado pelo ControladorEstado quando a animação de equipar/desequipar termina
+--- Reseta o estado de direção de equip
+--- @param direcaoFinal number 1 se terminou equipando, -1 se terminou desequipando
+_G.OnEquipAnimacaoTerminou = function(direcaoFinal: number)
+	print("[EntradaJogador] Animação de equip terminou. Direção final:", direcaoFinal)
+	direcaoEquip = 0
+
+	-- Se terminou desequipando, limpa referências
+	if direcaoFinal == -1 then
+		ultimoToolProcessado = nil
+	end
+end
 
 -- ═══════════════════════════════════════════════════════════════════
 -- FUNÇÕES DE AÇÃO
@@ -196,33 +206,91 @@ local function ObterModoAtual(): string
 	return "Base"
 end
 
---- Processa toggle de equipar/desequipar modo
-local function ProcessarToggleEquipar(modoDesejado: string)
-	if equipBusy then
+--- Processa quando um Tool é equipado
+--- Lê o modoAnimacao do Tool e envia ação de Equipar
+--- Se estava desequipando, inverte a animação ao invés de iniciar nova
+local function ProcessarToolEquipado(tool: Tool)
+	-- Verifica se o Tool tem um modoAnimacao definido
+	local modoAnimacaoValue = tool:FindFirstChild("modoAnimacao")
+	if not modoAnimacaoValue or not modoAnimacaoValue:IsA("StringValue") then
+		warn("[EntradaJogador] Tool '", tool.Name, "' não tem modoAnimacao definido")
+		return
+	end
+
+	local modoDesejado = modoAnimacaoValue.Value
+	if modoDesejado == "" or modoDesejado == "Base" then
+		return -- Não equipa se for Base ou vazio
+	end
+
+	-- Se estava desequipando o mesmo tool, inverte a animação
+	if direcaoEquip == -1 and ultimoToolProcessado == tool then
+		direcaoEquip = 1
+		toolAtualEquipado = tool
+
+		-- Primeiro inverte localmente, depois notifica servidor
+		if _G.InverterEquipAnimacao then
+			_G.InverterEquipAnimacao(1)
+		end
+		EnviarAcao("InverterEquipAnimacao", { direcao = 1, modo = modoDesejado })
+		print("[EntradaJogador] Invertendo animação: desequipando -> equipando")
 		return
 	end
 
 	local modoAtualValue = ObterModoAtual()
 
-	-- Se já está nesse modo, desequipa (volta para Base)
-	if modoDesejado ~= "Base" and modoAtualValue == modoDesejado then
-		equipBusy = true
-		EnviarAcao("Desequipar")
-
-		-- Libera após tempo da animação
-		task.delay(0.6, function()
-			equipBusy = false
-		end)
-	else
-		-- Equipa o novo modo
-		equipBusy = true
-		EnviarAcao("Equipar", modoDesejado)
-
-		-- Libera após tempo da animação
-		task.delay(0.6, function()
-			equipBusy = false
-		end)
+	-- Se já está nesse modo e não está em transição, não precisa equipar novamente
+	if modoAtualValue == modoDesejado and direcaoEquip == 0 then
+		toolAtualEquipado = tool
+		return
 	end
+
+	-- Equipa o novo modo
+	direcaoEquip = 1
+	toolAtualEquipado = tool
+	ultimoToolProcessado = tool
+	EnviarAcao("Equipar", modoDesejado)
+
+	print("[EntradaJogador] Tool equipado: ", tool.Name, " - Modo: ", modoDesejado)
+end
+
+--- Processa quando um Tool é desequipado
+--- Envia ação de Desequipar para voltar ao modo Base
+--- Se estava equipando, inverte a animação ao invés de iniciar nova
+local function ProcessarToolDesequipado(tool: Tool)
+	-- Verifica se era o tool que estava equipado ou sendo processado
+	if toolAtualEquipado ~= tool and ultimoToolProcessado ~= tool then
+		return
+	end
+
+	-- Se estava equipando o mesmo tool, inverte a animação
+	if direcaoEquip == 1 and ultimoToolProcessado == tool then
+		direcaoEquip = -1
+		toolAtualEquipado = nil
+
+		-- Primeiro inverte localmente, depois notifica servidor
+		if _G.InverterEquipAnimacao then
+			_G.InverterEquipAnimacao(-1)
+		end
+		EnviarAcao("InverterEquipAnimacao", { direcao = -1 })
+		print("[EntradaJogador] Invertendo animação: equipando -> desequipando")
+		return
+	end
+
+	local modoAtualValue = ObterModoAtual()
+
+	-- Se já está em Base e não está em transição, não precisa desequipar
+	if modoAtualValue == "Base" and direcaoEquip == 0 then
+		toolAtualEquipado = nil
+		return
+	end
+
+	-- Desequipa (volta para Base)
+	direcaoEquip = -1
+	toolAtualEquipado = nil
+	ultimoToolProcessado = tool
+	EnviarAcao("Desequipar")
+
+	print("[EntradaJogador] Tool desequipado: ", tool.Name)
 end
 
 --- Processa pular
@@ -286,13 +354,6 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 		return
 	end
 
-	-- Teclas de equipar com toggle
-	local modoParaTecla = MapaTeclaModo[input.KeyCode]
-	if modoParaTecla then
-		ProcessarToggleEquipar(modoParaTecla)
-		return
-	end
-
 	if input.KeyCode == Enum.KeyCode.Space then
 		ProcessarPular()
 		return
@@ -349,5 +410,46 @@ end)
 -- ═══════════════════════════════════════════════════════════════════
 -- INICIALIZAÇÃO
 -- ═══════════════════════════════════════════════════════════════════
+
+-- ═══════════════════════════════════════════════════════════════════
+-- DETECÇÃO DE TOOLS EQUIPADOS/DESEQUIPADOS
+-- ═══════════════════════════════════════════════════════════════════
+
+--- Detecta quando um filho é adicionado ao Character (pode ser Tool)
+local function OnChildAdded(child)
+	if child:IsA("Tool") then
+		ProcessarToolEquipado(child)
+	end
+end
+
+--- Detecta quando um filho é removido do Character (pode ser Tool desequipado)
+local function OnChildRemoved(child)
+	if child:IsA("Tool") then
+		ProcessarToolDesequipado(child)
+	end
+end
+
+--- Configura listeners para o Character atual
+local function ConfigurarCharacter(char)
+	-- Conecta eventos de adicionar/remover filhos
+	char.ChildAdded:Connect(OnChildAdded)
+	char.ChildRemoved:Connect(OnChildRemoved)
+
+	-- Verifica se já tem algum Tool equipado
+	for _, child in pairs(char:GetChildren()) do
+		if child:IsA("Tool") then
+			ProcessarToolEquipado(child)
+			break -- Só pode ter um Tool equipado por vez
+		end
+	end
+end
+
+-- Conecta ao evento de respawn
+player.CharacterAdded:Connect(ConfigurarCharacter)
+
+-- Configura o Character inicial (caso o script rode depois do Character carregar)
+if player.Character then
+	ConfigurarCharacter(player.Character)
+end
 
 print("[EntradaJogador] Inicializado - capturando inputs")
