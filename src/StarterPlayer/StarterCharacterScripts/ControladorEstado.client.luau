@@ -102,6 +102,28 @@ local animacoesCarregadas = {}
 local animacaoAtualMov = nil
 local animacaoAtualAcao = nil
 
+-- Sistema de direção reversa para andar/correr para trás
+local direcaoAtual = 1 -- 1 = frente, -1 = trás
+local velocidadeAnimacaoAlvo = 1 -- Velocidade alvo (para interpolação suave)
+local velocidadeAnimacaoAtual = 1 -- Velocidade atual (interpolada)
+local animacaoUsaDirecao = false -- Se a animação atual usa sistema de direção reversa
+local SUAVIDADE_TRANSICAO_DIRECAO = 10 -- Quanto maior, mais rápida a transição
+local SUAVIDADE_TRANSICAO_CORRENDO = SUAVIDADE_TRANSICAO_DIRECAO * 2 -- Transição 2x mais rápida quando correndo
+
+-- Sistema de pausa suave de animação (evita reset ao tocar rapidamente)
+local animacaoMovPausada = false -- Se a animação está pausada (parado)
+local ultimaAnimacaoMovNome = nil -- Nome da última animação de movimento
+local TEMPO_MANTER_ANIMACAO = 0.2 -- Tempo para manter animação pausada antes de realmente parar
+local VELOCIDADE_PAUSA = 0.15 -- Velocidade durante pausa (mantém movimento sutil)
+local timerPararAnimacao = nil -- Timer para parar a animação após tempo
+
+-- Animações que usam sistema de direção reversa
+local ANIMACOES_COM_DIRECAO = {
+	Andando = true,
+	Correndo = true,
+	AndandoAgachado = true,
+}
+
 -- Forward declaration de funções usadas antes de serem definidas
 local AtualizarAnimacaoMovimento
 
@@ -350,6 +372,58 @@ end
 -- FUNÇÕES DE ANIMAÇÃO
 -- ═══════════════════════════════════════════════════════════════════
 
+--- Calcula o multiplicador de direção baseado na direção de movimento
+--- Retorna 1 para frente, -1 para trás, com base no ângulo entre MoveDirection e LookVector
+---@return number Multiplicador de direção (-1 a 1)
+local function CalcularMultiplicadorDirecao(): number
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return 1
+	end
+
+	local moveDir = humanoid.MoveDirection
+	if moveDir.Magnitude < 0.1 then
+		return direcaoAtual -- Parado, mantém direção atual
+	end
+
+	-- Obtém apenas componentes XZ (ignora Y)
+	local lookVector = hrp.CFrame.LookVector
+	local lookXZ = Vector3.new(lookVector.X, 0, lookVector.Z).Unit
+	local moveXZ = Vector3.new(moveDir.X, 0, moveDir.Z).Unit
+
+	-- Calcula dot product para determinar se está indo para frente ou para trás
+	local dot = lookXZ:Dot(moveXZ)
+
+	-- dot > 0 = frente, dot < 0 = trás
+	-- Usamos threshold de 0 para transição suave
+	if dot < -0.1 then
+		return -1 -- Andando para trás
+	elseif dot > 0.1 then
+		return 1 -- Andando para frente
+	else
+		-- Zona de transição (andando de lado), mantém direção atual
+		return direcaoAtual
+	end
+end
+
+--- Define a velocidade base da animação de movimento respeitando o sistema de direção
+--- Se a animação usa direção reversa, atualiza velocidadeAnimacaoAlvo para interpolação suave
+---@param velocidadeBase number Velocidade base (positiva)
+local function DefinirVelocidadeMovimento(velocidadeBase: number)
+	if not animacaoAtualMov or not animacaoAtualMov.IsPlaying then
+		return
+	end
+
+	if animacaoUsaDirecao then
+		-- Atualiza apenas a velocidade alvo, a interpolação faz o resto
+		local mult = CalcularMultiplicadorDirecao()
+		velocidadeAnimacaoAlvo = velocidadeBase * mult
+	else
+		-- Animação sem direção, aplica diretamente
+		animacaoAtualMov:AdjustSpeed(velocidadeBase)
+	end
+end
+
 --- Carrega ou obtém animação do cache
 local function ObterAnimacao(animId: string): AnimationTrack?
 	if animacoesCarregadas[animId] then
@@ -372,10 +446,41 @@ local function ObterAnimacao(animId: string): AnimationTrack?
 end
 
 --- Para animação atual de movimento
-local function PararAnimacaoMov()
+--- Se forcarParar = false, pausa suavemente (para retomar depois)
+--- Se forcarParar = true, para imediatamente
+local function PararAnimacaoMov(forcarParar: boolean?)
 	if animacaoAtualMov then
-		animacaoAtualMov:Stop(TIMINGS.MoveFadeOut)
-		animacaoAtualMov = nil
+		-- Cancela timer anterior se existir
+		if timerPararAnimacao then
+			pcall(task.cancel, timerPararAnimacao)
+			timerPararAnimacao = nil
+		end
+
+		if forcarParar then
+			-- Para imediatamente
+			animacaoAtualMov:Stop(TIMINGS.MoveFadeOut)
+			animacaoAtualMov = nil
+			animacaoMovPausada = false
+			ultimaAnimacaoMovNome = nil
+		else
+			-- Pausa suavemente (velocidade vai para 0)
+			animacaoMovPausada = true
+			velocidadeAnimacaoAlvo = 0
+
+			-- Agenda parada real após tempo
+			timerPararAnimacao = task.delay(TEMPO_MANTER_ANIMACAO, function()
+				if animacaoMovPausada and animacaoAtualMov then
+					animacaoAtualMov:Stop(TIMINGS.MoveFadeOut)
+					animacaoAtualMov = nil
+					animacaoMovPausada = false
+					ultimaAnimacaoMovNome = nil
+
+					-- Toca a animação de Idle do modo atual
+					AtualizarAnimacaoMovimento()
+				end
+				timerPararAnimacao = nil
+			end)
+		end
 	end
 end
 
@@ -400,7 +505,9 @@ local function PararAnimacaoAcao()
 end
 
 --- Toca animação de movimento
-local function TocarAnimacaoMov(nomeAnimacao: string, velocidade: number?)
+---@param nomeAnimacao string Nome da animação
+---@param velocidadeBase number? Velocidade base (será multiplicada pela direção se aplicável)
+local function TocarAnimacaoMov(nomeAnimacao: string, velocidadeBase: number?)
 	local animId = ArmasTemplate.ObterAnimacao(estadoAtual.modoAnimacao, nomeAnimacao)
 	if not animId then
 		return
@@ -411,23 +518,77 @@ local function TocarAnimacaoMov(nomeAnimacao: string, velocidade: number?)
 		return
 	end
 
-	-- Não reinicia se já está tocando a mesma
-	if animacaoAtualMov == track and track.IsPlaying then
-		-- Apenas ajusta velocidade se necessário
-		if velocidade then
-			track:AdjustSpeed(velocidade)
+	-- Verifica se esta animação usa sistema de direção reversa
+	local usaDirecao = ANIMACOES_COM_DIRECAO[nomeAnimacao] == true
+	local velocidade = velocidadeBase or 1
+
+	-- Cancela timer de parada se existir (estamos retomando)
+	if timerPararAnimacao then
+		pcall(task.cancel, timerPararAnimacao)
+		timerPararAnimacao = nil
+	end
+
+	-- Verifica se é a mesma animação que estava pausada ou tocando
+	local mesmaAnimacao = (animacaoAtualMov == track)
+		or (ultimaAnimacaoMovNome == nomeAnimacao and animacaoAtualMov and animacaoAtualMov.IsPlaying)
+
+	if mesmaAnimacao and animacaoAtualMov and animacaoAtualMov.IsPlaying then
+		-- Retoma ou continua a animação existente
+		animacaoMovPausada = false
+		animacaoUsaDirecao = usaDirecao
+
+		if not usaDirecao then
+			-- Se não usa direção, aplica velocidade diretamente
+			velocidadeAnimacaoAlvo = velocidade
+		else
+			-- A velocidade será ajustada no loop de Heartbeat
+			velocidadeAnimacaoAlvo = velocidade * CalcularMultiplicadorDirecao()
 		end
 		return
 	end
 
-	PararAnimacaoMov()
+	-- Verifica se é uma animação diferente da atual
+	if animacaoAtualMov and animacaoAtualMov ~= track then
+		-- Para a animação anterior (forçado, pois é diferente)
+		-- Mas preserva a direção atual para continuidade
+		PararAnimacaoMov(true)
+	end
 
-	track.Priority = Enum.AnimationPriority.Core
-	track.Looped = true
-	track:Play(TIMINGS.MoveFadeIn)
+	-- Se não tinha animação ou era diferente, inicia nova
+	if not animacaoAtualMov or not animacaoAtualMov.IsPlaying then
+		track.Priority = Enum.AnimationPriority.Core
+		track.Looped = true
+		track:Play(TIMINGS.MoveFadeIn)
 
-	if velocidade then
-		track:AdjustSpeed(velocidade)
+		-- Aplica velocidade inicial imediatamente com direção preservada
+		if usaDirecao then
+			local mult = CalcularMultiplicadorDirecao()
+			-- Se já tínhamos uma direção, preserva ela
+			if direcaoAtual ~= 0 then
+				mult = direcaoAtual
+			end
+			local velocidadeInicial = velocidade * mult
+			track:AdjustSpeed(velocidadeInicial)
+			velocidadeAnimacaoAtual = velocidadeInicial
+		else
+			track:AdjustSpeed(velocidade)
+			velocidadeAnimacaoAtual = velocidade
+		end
+	end
+
+	-- Configura sistema de direção
+	animacaoUsaDirecao = usaDirecao
+	animacaoMovPausada = false
+	ultimaAnimacaoMovNome = nomeAnimacao
+
+	if usaDirecao then
+		-- Calcula velocidade alvo com direção
+		local mult = CalcularMultiplicadorDirecao()
+		velocidadeAnimacaoAlvo = velocidade * mult
+		-- velocidadeAnimacaoAtual já foi definida acima, interpolação fará a transição
+	else
+		-- Animação normal sem sistema de direção
+		velocidadeAnimacaoAlvo = velocidade
 	end
 
 	animacaoAtualMov = track
@@ -530,6 +691,17 @@ AtualizarAnimacaoMovimento = function()
 		nomeAnimacao = mapaAnimacoes[estado] or "Idle"
 	end
 
+	-- Verifica se está parando de andar/correr para usar sistema de pausa
+	local animacaoQueUsaDirecao = ANIMACOES_COM_DIRECAO[ultimaAnimacaoMovNome]
+	local querIdle = (nomeAnimacao == "Idle" or nomeAnimacao == "IdleAgachado")
+
+	if querIdle and animacaoQueUsaDirecao and animacaoAtualMov and animacaoAtualMov.IsPlaying then
+		-- Ao invés de trocar para Idle, pausa a animação atual
+		-- Isso permite retomar suavemente se o jogador voltar a andar rapidamente
+		PararAnimacaoMov(false) -- Pausa suave
+		return
+	end
+
 	TocarAnimacaoMov(nomeAnimacao, velocidade)
 end
 
@@ -545,6 +717,7 @@ local function ProcessarSincronizacao(entidade: Model, dados)
 
 	-- Guarda estado anterior para detectar mudanças
 	local acaoAnterior = estadoAtual.estadoAcao
+	local modoAnterior = estadoAtual.modoAnimacao
 
 	-- Atualiza estado local
 	estadoAtual.estadoMov = dados.estadoMov
@@ -553,6 +726,14 @@ local function ProcessarSincronizacao(entidade: Model, dados)
 	estadoAtual.bloqueando = dados.bloqueando
 	estadoAtual.agachado = dados.agachado
 	estadoAtual.correndo = dados.correndo
+
+	-- Se o modo de animação mudou, força atualização da animação de movimento
+	-- Isso garante que ao equipar/desequipar, as animações troquem para o novo modo
+	local modoMudou = modoAnterior ~= estadoAtual.modoAnimacao
+	if modoMudou and animacaoAtualMov then
+		-- Para a animação atual forçadamente para garantir que a nova seja do modo correto
+		PararAnimacaoMov(true)
+	end
 
 	-- Se entrou em ação de combate, preserva intenção de correr e força parar corrida local
 	if
@@ -600,10 +781,8 @@ local function ProcessarSincronizacao(entidade: Model, dados)
 
 	-- NÃO atualiza animação de movimento se está correndo no ar (evita flick)
 	if movementFlags.isRunning and (movementFlags.isJumping or movementFlags.isFalling) then
-		-- Apenas ajusta velocidade
-		if animacaoAtualMov then
-			animacaoAtualMov:AdjustSpeed(TIMINGS.RunInAirSpeed)
-		end
+		-- Apenas ajusta velocidade respeitando direção
+		DefinirVelocidadeMovimento(TIMINGS.RunInAirSpeed)
 		return
 	end
 
@@ -699,10 +878,8 @@ local function AtualizarEstadoMovimento()
 			if estadoAtual.estadoMov ~= "Correndo" then
 				estadoAtual.estadoMov = "Correndo"
 			end
-			-- Apenas ajusta velocidade da track atual
-			if animacaoAtualMov then
-				animacaoAtualMov:AdjustSpeed(TIMINGS.RunInAirSpeed)
-			end
+			-- Apenas ajusta velocidade da track atual respeitando direção
+			DefinirVelocidadeMovimento(TIMINGS.RunInAirSpeed)
 			return
 		end
 
@@ -761,7 +938,7 @@ local function AtualizarEstadoMovimento()
 				or estadoAtual.estadoAcao == "Defendendo"
 			)
 			if not (estadoAtual.estadoMov == "Andando" and emCombate) then
-				animacaoAtualMov:AdjustSpeed(1)
+				DefinirVelocidadeMovimento(1)
 			end
 		end
 	end
@@ -816,7 +993,7 @@ local function OnStateChanged(oldState, newState)
 
 		-- Se estava correndo, mantém a animação de corrida com velocidade reduzida
 		if movementFlags.isRunning and animacaoAtualMov then
-			animacaoAtualMov:AdjustSpeed(TIMINGS.RunInAirSpeed)
+			DefinirVelocidadeMovimento(TIMINGS.RunInAirSpeed)
 			estadoAtual.estadoMov = "Correndo"
 			return -- Não chama AtualizarEstadoMovimento
 		end
@@ -851,7 +1028,7 @@ local function OnStateChanged(oldState, newState)
 						or estadoAtual.estadoAcao == "Defendendo"
 					)
 					if not emCombate then
-						animacaoAtualMov:AdjustSpeed(1)
+						DefinirVelocidadeMovimento(1)
 					end
 				end
 				-- Sincroniza com servidor sem mudar para Parado
@@ -910,6 +1087,88 @@ TocarAnimacao.OnClientEvent:Connect(ProcessarTocarAnimacao)
 
 -- Loop híbrido de atualização (para input-based como MoveDirection)
 RunService.Heartbeat:Connect(AtualizarEstadoMovimento)
+
+-- ═══════════════════════════════════════════════════════════════════
+-- INTERPOLAÇÃO SUAVE DE DIREÇÃO DA ANIMAÇÃO
+-- ═══════════════════════════════════════════════════════════════════
+
+--- Atualiza a velocidade da animação de movimento com interpolação suave
+--- Permite transição suave entre andar para frente (velocidade +1) e para trás (-1)
+--- Também permite pausar suavemente (velocidade 0) quando parado
+local function AtualizarDirecaoAnimacao(deltaTime: number)
+	-- Só processa se há animação de movimento ativa
+	if not animacaoAtualMov or not animacaoAtualMov.IsPlaying then
+		return
+	end
+
+	-- Se está pausado, interpola para velocidade reduzida (mantém direção)
+	if animacaoMovPausada then
+		-- Velocidade alvo é VELOCIDADE_PAUSA com direção preservada
+		local velocidadePausaComDirecao = VELOCIDADE_PAUSA * direcaoAtual
+		local diferenca = velocidadePausaComDirecao - velocidadeAnimacaoAtual
+		if math.abs(diferenca) > 0.01 then
+			-- Usa transição rápida para pausar
+			velocidadeAnimacaoAtual = velocidadeAnimacaoAtual
+				+ diferenca * math.min(1, deltaTime * SUAVIDADE_TRANSICAO_CORRENDO)
+			animacaoAtualMov:AdjustSpeed(velocidadeAnimacaoAtual)
+		elseif velocidadeAnimacaoAtual ~= velocidadePausaComDirecao then
+			velocidadeAnimacaoAtual = velocidadePausaComDirecao
+			animacaoAtualMov:AdjustSpeed(velocidadePausaComDirecao)
+		end
+		return
+	end
+
+	-- Se não usa sistema de direção, apenas interpola para a velocidade alvo
+	if not animacaoUsaDirecao then
+		local diferenca = velocidadeAnimacaoAlvo - velocidadeAnimacaoAtual
+		if math.abs(diferenca) > 0.01 then
+			velocidadeAnimacaoAtual = velocidadeAnimacaoAtual
+				+ diferenca * math.min(1, deltaTime * SUAVIDADE_TRANSICAO_DIRECAO)
+			animacaoAtualMov:AdjustSpeed(velocidadeAnimacaoAtual)
+		elseif velocidadeAnimacaoAtual ~= velocidadeAnimacaoAlvo then
+			velocidadeAnimacaoAtual = velocidadeAnimacaoAlvo
+			animacaoAtualMov:AdjustSpeed(velocidadeAnimacaoAtual)
+		end
+		return
+	end
+
+	-- Calcula nova direção baseada no movimento atual
+	local novaDirecao = CalcularMultiplicadorDirecao()
+
+	-- Atualiza direção atual se mudou
+	if novaDirecao ~= direcaoAtual then
+		direcaoAtual = novaDirecao
+	end
+
+	-- Calcula velocidade alvo (velocidade base * direção)
+	-- A velocidade base é o valor absoluto da velocidade alvo anterior
+	local velocidadeBase = math.abs(velocidadeAnimacaoAlvo)
+	if velocidadeBase == 0 then
+		velocidadeBase = 1
+	end
+	velocidadeAnimacaoAlvo = velocidadeBase * direcaoAtual
+
+	-- Determina a suavidade da transição
+	-- Usa transição mais rápida quando está correndo
+	local suavidade = SUAVIDADE_TRANSICAO_DIRECAO
+	if estadoAtual.estadoMov == "Correndo" then
+		suavidade = SUAVIDADE_TRANSICAO_CORRENDO
+	end
+
+	-- Interpolação suave (lerp) da velocidade atual para a alvo
+	local diferenca = velocidadeAnimacaoAlvo - velocidadeAnimacaoAtual
+	if math.abs(diferenca) > 0.01 then
+		velocidadeAnimacaoAtual = velocidadeAnimacaoAtual + diferenca * math.min(1, deltaTime * suavidade)
+		animacaoAtualMov:AdjustSpeed(velocidadeAnimacaoAtual)
+	elseif velocidadeAnimacaoAtual ~= velocidadeAnimacaoAlvo then
+		-- Snap para valor final quando muito próximo
+		velocidadeAnimacaoAtual = velocidadeAnimacaoAlvo
+		animacaoAtualMov:AdjustSpeed(velocidadeAnimacaoAtual)
+	end
+end
+
+-- Loop de interpolação de direção (RenderStepped para suavidade visual)
+RunService.RenderStepped:Connect(AtualizarDirecaoAnimacao)
 
 -- ═══════════════════════════════════════════════════════════════════
 -- PRÉ-CARREGAMENTO DE ANIMAÇÕES
@@ -972,6 +1231,18 @@ player.CharacterAdded:Connect(function(novoCharacter)
 		isSwimming = false,
 	}
 	jumpHoldUntil = 0
+
+	-- Reseta sistema de direção reversa
+	direcaoAtual = 1
+	velocidadeAnimacaoAlvo = 1
+	velocidadeAnimacaoAtual = 1
+	animacaoUsaDirecao = false
+	animacaoMovPausada = false
+	ultimaAnimacaoMovNome = nil
+	if timerPararAnimacao then
+		pcall(task.cancel, timerPararAnimacao)
+		timerPararAnimacao = nil
+	end
 
 	-- Reseta estado
 	estadoAtual = {
