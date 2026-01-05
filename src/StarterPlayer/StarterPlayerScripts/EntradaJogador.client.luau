@@ -39,6 +39,7 @@ local Configuracao = {
 	TeclaAgachar = Enum.KeyCode.C,
 	TeclaCorrer = Enum.KeyCode.LeftShift,
 	TeclaQuebrarDefesa = Enum.KeyCode.G,
+	TeclaDash = Enum.KeyCode.Q,
 }
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -476,6 +477,18 @@ local function ProcessarPular()
 	EnviarAcao("Pular")
 end
 
+--- Processa dash
+--- Calcula a direção baseado no MoveDirection do humanoid em relação ao LookVector
+local function ProcessarDash()
+	-- Usa a função global para calcular direção (definida em ControladorEstado)
+	local direcao = "Frente"
+	if _G.CalcularDirecaoDash then
+		direcao = _G.CalcularDirecaoDash()
+	end
+
+	EnviarAcao("Dash", direcao)
+end
+
 -- ═══════════════════════════════════════════════════════════════════
 -- LISTENERS DE INPUT
 -- ═══════════════════════════════════════════════════════════════════
@@ -519,6 +532,11 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
 
 	if input.KeyCode == Configuracao.TeclaQuebrarDefesa then
 		ProcessarQuebrarDefesa()
+		return
+	end
+
+	if input.KeyCode == Configuracao.TeclaDash then
+		ProcessarDash()
 		return
 	end
 

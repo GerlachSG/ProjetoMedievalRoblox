@@ -31,6 +31,7 @@ function PlayerAdded(Player)
 		createValue("BoolValue", "ProntoAparar", false)
 		createValue("BoolValue", "StunadoOn", false)
 		createValue("BoolValue", "CorrendoOn", false)
+		createValue("BoolValue", "DashOn", false)
 
 		-- Atributos de combate
 		createValue("NumberValue", "Forca", 0) -- Força (aumenta dano)

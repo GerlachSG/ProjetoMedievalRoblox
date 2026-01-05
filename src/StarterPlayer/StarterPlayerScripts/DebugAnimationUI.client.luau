@@ -39,9 +39,7 @@ local function createLabelGui()
 	frame.Name = "Panel"
 	frame.AnchorPoint = Vector2.new(0, 0)
 	frame.Position = UDim2.new(0, 5, 0, 100)
-	frame.Size = UDim2.new(0, 250, 0, 140)
-	frame.Size = UDim2.new(0, 250, 0, 170)
-	frame.Size = UDim2.new(0, 250, 0, 190)
+	frame.Size = UDim2.new(0, 250, 0, 210)
 	frame.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 	frame.BackgroundTransparency = 0.4
 	frame.BorderSizePixel = 0
@@ -75,6 +73,7 @@ local function createLabelGui()
 		ProntoAparar = mkLabel("ProntoAparar"),
 		StunadoOn = mkLabel("StunadoOn"),
 		CorrendoOn = mkLabel("CorrendoOn"),
+		DashOn = mkLabel("DashOn"),
 	}
 
 	return labels
@@ -104,6 +103,7 @@ local function main()
 		"ProntoAparar",
 		"StunadoOn",
 		"CorrendoOn",
+		"DashOn",
 	}
 
 	local last = {}

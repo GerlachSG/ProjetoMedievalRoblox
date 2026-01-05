@@ -89,6 +89,7 @@ local movementFlags = {
 	isFalling = false, -- Estado de queda
 	isClimbing = false, -- Estado de escalada
 	isSwimming = false, -- Estado de nado
+	isDashing = false, -- Estado de dash
 }
 
 -- Flag global para saber se Shift está sendo segurado (independente de estado)
@@ -488,6 +489,151 @@ function _G.ObterDirecaoEquip()
 end
 
 -- ═══════════════════════════════════════════════════════════════════
+-- SISTEMA DE DASH
+-- ═══════════════════════════════════════════════════════════════════
+
+-- Estado do dash local
+local dashState = {
+	animacao = nil, -- AnimationTrack atual do dash
+	direcao = "Frente", -- Direção do dash atual
+	conexaoTermino = nil, -- Conexão do evento Stopped
+	velocityConnection = nil, -- Conexão do RenderStepped para impulso sustentado
+}
+
+--- Calcula a direção do dash baseado no input de movimento
+--- Retorna a direção relativa ao LookVector do personagem
+---@return string "Frente", "Tras", "Esquerda", "Direita"
+local function CalcularDirecaoDashLocal(): string
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return "Frente"
+	end
+
+	local moveDir = humanoid.MoveDirection
+
+	-- Se não está se movendo, dash para frente
+	if moveDir.Magnitude < 0.1 then
+		return "Frente"
+	end
+
+	local lookVector = hrp.CFrame.LookVector
+	local rightVector = hrp.CFrame.RightVector
+
+	local lookXZ = Vector3.new(lookVector.X, 0, lookVector.Z).Unit
+	local rightXZ = Vector3.new(rightVector.X, 0, rightVector.Z).Unit
+	local moveXZ = Vector3.new(moveDir.X, 0, moveDir.Z).Unit
+
+	local dotForward = lookXZ:Dot(moveXZ)
+	local dotRight = rightXZ:Dot(moveXZ)
+
+	-- Determina direção primária baseada em qual dot product é maior
+	if math.abs(dotForward) >= math.abs(dotRight) then
+		-- Mais para frente/trás do que esquerda/direita
+		if dotForward >= 0 then
+			return "Frente"
+		else
+			return "Tras"
+		end
+	else
+		-- Mais para esquerda/direita do que frente/trás
+		if dotRight >= 0 then
+			return "Direita"
+		else
+			return "Esquerda"
+		end
+	end
+end
+
+-- Expõe a função para EntradaJogador.client.lua usar
+_G.CalcularDirecaoDash = CalcularDirecaoDashLocal
+
+--- Inicia aplicação de impulso sustentado durante o dash
+--- A direção é recalculada a cada frame baseado na orientação atual do personagem
+local function IniciarImpulsoDash(direcao: string)
+	local hrp = character:FindFirstChild("HumanoidRootPart")
+	if not hrp then
+		return
+	end
+
+	local config = ArmasTemplate.ConfiguracaoGlobal
+	local forcaDash = config.ForcaDash or 50
+
+	-- Cria conexão para aplicar velocidade sustentada durante o dash
+	if dashState.velocityConnection then
+		dashState.velocityConnection:Disconnect()
+	end
+
+	dashState.velocityConnection = RunService.RenderStepped:Connect(function(_deltaTime)
+		if not dashState.animacao or not dashState.animacao.IsPlaying then
+			if dashState.velocityConnection then
+				dashState.velocityConnection:Disconnect()
+				dashState.velocityConnection = nil
+			end
+			return
+		end
+
+		-- Recalcula direção a cada frame baseado na orientação ATUAL do personagem
+		local lookVector = hrp.CFrame.LookVector
+		local rightVector = hrp.CFrame.RightVector
+
+		local dirVector
+		if direcao == "Frente" then
+			dirVector = lookVector
+		elseif direcao == "Tras" then
+			dirVector = -lookVector
+		elseif direcao == "Esquerda" then
+			dirVector = -rightVector
+		elseif direcao == "Direita" then
+			dirVector = rightVector
+		else
+			dirVector = lookVector
+		end
+
+		-- Normaliza para XZ (horizontal apenas)
+		dirVector = Vector3.new(dirVector.X, 0, dirVector.Z).Unit
+
+		-- Aplica velocidade sustentada (não impulso instantâneo)
+		local velocidadeAtual = hrp.AssemblyLinearVelocity
+		local velocidadeAlvo = dirVector * forcaDash
+
+		-- Mantém componente Y (gravidade) e substitui XZ
+		hrp.AssemblyLinearVelocity = Vector3.new(velocidadeAlvo.X, velocidadeAtual.Y, velocidadeAlvo.Z)
+	end)
+end
+
+--- Para o impulso do dash
+local function PararImpulsoDash()
+	if dashState.velocityConnection then
+		dashState.velocityConnection:Disconnect()
+		dashState.velocityConnection = nil
+	end
+end
+
+--- Callback quando animação de dash termina
+local function OnDashAnimacaoTerminou()
+	print("[ControladorEstado] Dash animação terminou")
+
+	-- Para impulso
+	PararImpulsoDash()
+
+	-- Limpa estado
+	dashState.animacao = nil
+	dashState.direcao = "Frente"
+	movementFlags.isDashing = false
+
+	if dashState.conexaoTermino then
+		dashState.conexaoTermino:Disconnect()
+		dashState.conexaoTermino = nil
+	end
+
+	-- Notifica servidor que dash terminou
+	TentarAcao:FireServer("DashTerminou")
+
+	-- Atualiza animação de movimento
+	AtualizarAnimacaoMovimento()
+end
+
+-- ═══════════════════════════════════════════════════════════════════
 -- FUNÇÕES DE ANIMAÇÃO
 -- ═══════════════════════════════════════════════════════════════════
 
@@ -729,6 +875,9 @@ local function TocarAnimacaoAcao(animId: string, loop: boolean, velocidade: numb
 	-- Verifica se é animação de equipar/desequipar
 	local ehEquipar = nomeAnimacao and (nomeAnimacao == "Equipar" or nomeAnimacao == "Desequipar")
 
+	-- Verifica se é animação de dash
+	local ehDash = nomeAnimacao and (nomeAnimacao:match("^Dash"))
+
 	-- Se é equipar/desequipar e já tem uma animação de equip tocando, não para - vai inverter depois
 	if ehEquipar and equipAnimState.animacao and equipAnimState.animacao.IsPlaying then
 		-- A inversão será feita pelo sistema de InverterEquipAnimacao
@@ -744,6 +893,42 @@ local function TocarAnimacaoAcao(animId: string, loop: boolean, velocidade: numb
 	track:AdjustSpeed(velocidade)
 
 	animacaoAtualAcao = track
+
+	-- Configura sistema de dash
+	if ehDash then
+		-- Limpa estado anterior
+		if dashState.conexaoTermino then
+			dashState.conexaoTermino:Disconnect()
+		end
+		PararImpulsoDash()
+
+		-- Extrai direção do nome da animação (DashFrente, DashTras, etc.)
+		local direcao = "Frente"
+		if nomeAnimacao == "DashFrente" then
+			direcao = "Frente"
+		elseif nomeAnimacao == "DashTras" then
+			direcao = "Tras"
+		elseif nomeAnimacao == "DashEsquerda" then
+			direcao = "Esquerda"
+		elseif nomeAnimacao == "DashDireita" then
+			direcao = "Direita"
+		end
+
+		dashState.animacao = track
+		dashState.direcao = direcao
+		movementFlags.isDashing = true
+
+		-- Conecta callback de término
+		dashState.conexaoTermino = track.Stopped:Connect(function()
+			OnDashAnimacaoTerminou()
+		end)
+
+		-- Inicia impulso sustentado
+		IniciarImpulsoDash(direcao)
+
+		print("[ControladorEstado] Animação de Dash iniciada:", nomeAnimacao)
+		return
+	end
 
 	-- Configura sistema de equipar/desequipar reversível
 	if ehEquipar then

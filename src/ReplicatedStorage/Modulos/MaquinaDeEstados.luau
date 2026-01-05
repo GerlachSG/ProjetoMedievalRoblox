@@ -46,6 +46,7 @@ MaquinaDeEstados.EstadoAcao = {
 	Stunado = "Stunado",
 	Equipando = "Equipando",
 	Desequipando = "Desequipando",
+	Dashando = "Dashando",
 	Morto = "Morto",
 }
 
@@ -56,6 +57,7 @@ local ESTADOS_BLOQUEANTES = {
 	[MaquinaDeEstados.EstadoAcao.Morto] = true,
 	[MaquinaDeEstados.EstadoAcao.Equipando] = true,
 	[MaquinaDeEstados.EstadoAcao.Desequipando] = true,
+	[MaquinaDeEstados.EstadoAcao.Dashando] = true,
 }
 
 -- Estados que permitem cancelar para ataque (riposte)
@@ -98,6 +100,10 @@ export type DadosEstado = {
 	-- Novos campos para sistema de combo por marcadores
 	janelaComboAtiva: boolean, -- Se está na janela de input do combo
 	continuarCombo: boolean, -- Se o player clicou M1 durante a janela
+	-- Campos para sistema de Dash
+	dashando: boolean,
+	ultimoDash: number,
+	direcaoDash: string,
 }
 
 --- Cria nova instância da máquina de estados
@@ -127,6 +133,10 @@ function MaquinaDeEstados.Novo(entidade: Model)
 		-- Sistema de combo por marcadores
 		janelaComboAtiva = false,
 		continuarCombo = false,
+		-- Sistema de Dash
+		dashando = false,
+		ultimoDash = 0,
+		direcaoDash = "Frente",
 	} :: DadosEstado
 
 	-- Callbacks para notificar mudanças
@@ -684,6 +694,72 @@ function MaquinaDeEstados:TenteDesequipar(): (boolean, string?)
 	self:_AlterarEstadoAcao(MaquinaDeEstados.EstadoAcao.Desequipando)
 
 	return true, nil
+end
+
+--- Tenta fazer dash
+---@param direcao string "Frente", "Tras", "Esquerda", "Direita"
+---@return boolean sucesso
+---@return string? motivo
+function MaquinaDeEstados:TenteDash(direcao: string): (boolean, string?)
+	-- Não pode dar dash em estado bloqueante
+	if self:_EstaBloqueado() then
+		return false, "EstadoBloqueante"
+	end
+
+	-- Não pode dar dash enquanto outra ação está em andamento
+	if self.dados.estadoAcao ~= MaquinaDeEstados.EstadoAcao.Nenhuma then
+		return false, "AcaoEmAndamento"
+	end
+
+	-- Não pode dar dash enquanto bloqueia
+	if self.dados.bloqueando then
+		return false, "Bloqueando"
+	end
+
+	-- Não pode dar dash enquanto agachado
+	if self.dados.agachado then
+		return false, "Agachado"
+	end
+
+	-- Não pode dar dash no ar
+	if
+		self.dados.estadoMov == MaquinaDeEstados.EstadoMov.Pulando
+		or self.dados.estadoMov == MaquinaDeEstados.EstadoMov.Caindo
+	then
+		return false, "NoAr"
+	end
+
+	-- Verifica cooldown
+	local ArmasTemplate = require(ReplicatedStorage:WaitForChild("Modulos"):WaitForChild("ArmasTemplate"))
+	local config = ArmasTemplate.ConfiguracaoGlobal
+	local agora = tick()
+	local cooldown = config.CooldownDash or 1.5
+
+	if (agora - self.dados.ultimoDash) < cooldown then
+		return false, "Cooldown"
+	end
+
+	-- Aplica estado de dash
+	self.dados.dashando = true
+	self.dados.direcaoDash = direcao or "Frente"
+	self.dados.ultimoDash = agora
+
+	self:_AlterarEstadoAcao(MaquinaDeEstados.EstadoAcao.Dashando)
+
+	return true, nil
+end
+
+--- Completa o dash (chamado quando a animação termina)
+function MaquinaDeEstados:CompletarDash()
+	if self.dados.estadoAcao ~= MaquinaDeEstados.EstadoAcao.Dashando then
+		return false
+	end
+
+	self.dados.dashando = false
+	self.dados.direcaoDash = "Frente"
+	self:_AlterarEstadoAcao(MaquinaDeEstados.EstadoAcao.Nenhuma)
+
+	return true
 end
 
 -- ═══════════════════════════════════════════════════════════════════

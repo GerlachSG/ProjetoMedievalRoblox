@@ -97,6 +97,7 @@ function ControladorCombate._SincronizarEstado(entidade: Model)
 		atualizarValor("ProntoAparar", dados.prontoParaAparar)
 		atualizarValor("StunadoOn", dados.stunado)
 		atualizarValor("CorrendoOn", dados.correndo)
+		atualizarValor("DashOn", dados.dashando)
 	end
 
 	-- Debug log
@@ -911,6 +912,87 @@ function ControladorCombate.ProcessarPararCorrer(entidade: Model)
 	return true
 end
 
+-- ═══════════════════════════════════════════════════════════════════
+-- SISTEMA DE DASH
+-- ═══════════════════════════════════════════════════════════════════
+
+--- Processa dash
+---@param entidade Model
+---@param direcao string "Frente", "Tras", "Esquerda", "Direita"
+function ControladorCombate.ProcessarDash(entidade: Model, direcao: string)
+	local maquina = ControladorCombate.ObterMaquina(entidade)
+
+	-- Salva se estava correndo antes do dash para restaurar depois
+	local estavaCorrendo = maquina.dados.correndo
+
+	local sucesso, motivo = maquina:TenteDash(direcao)
+
+	if not sucesso then
+		print(string.format("[Combate] %s: Dash FALHOU - %s", entidade.Name, motivo or "?"))
+		return false, motivo
+	end
+
+	print(string.format("[Combate] %s: Dash OK - direção=%s", entidade.Name, direcao))
+
+	-- Se estava correndo, guarda intenção de correr para depois do dash
+	if estavaCorrendo then
+		maquina.dados.correndoIntent = true
+	end
+
+	-- Toca animação direcional
+	local nomeAnimacao = "Dash" .. direcao -- "DashFrente", "DashTras", etc.
+	local velocidadeAnim = ArmasTemplate.ConfiguracaoGlobal.VelocidadeAnimacaoDash or 1.0
+	ControladorCombate._TocarAnimacao(entidade, nomeAnimacao, false, velocidadeAnim)
+
+	-- Atualiza status DashOn
+	local status = entidade:FindFirstChild("Status")
+	if status then
+		local dashOn = status:FindFirstChild("DashOn")
+		if dashOn then
+			dashOn.Value = true
+		end
+	end
+
+	ControladorCombate._SincronizarEstado(entidade)
+	return true
+end
+
+--- Processa fim do dash (chamado pelo cliente quando animação termina)
+function ControladorCombate.ProcessarDashTerminou(entidade: Model)
+	local maquina = ControladorCombate.ObterMaquina(entidade)
+
+	if maquina.dados.estadoAcao ~= MaquinaDeEstados.EstadoAcao.Dashando then
+		return false, "NaoEstaDashando"
+	end
+
+	maquina:CompletarDash()
+
+	print(string.format("[Combate] %s: Dash TERMINOU", entidade.Name))
+
+	-- Atualiza status DashOn
+	local status = entidade:FindFirstChild("Status")
+	if status then
+		local dashOn = status:FindFirstChild("DashOn")
+		if dashOn then
+			dashOn.Value = false
+		end
+	end
+
+	-- Se tinha intenção de correr, restaura corrida
+	local humanoid = entidade:FindFirstChildOfClass("Humanoid")
+	if maquina.dados.correndoIntent then
+		maquina.dados.correndoIntent = nil
+		maquina.dados.correndo = true
+		if humanoid then
+			humanoid.WalkSpeed = ArmasTemplate.ConfiguracaoGlobal.VelocidadeCorrendo or 25
+		end
+		print(string.format("[Combate] %s: Corrida restaurada após dash", entidade.Name))
+	end
+
+	ControladorCombate._SincronizarEstado(entidade)
+	return true
+end
+
 --- Processa aterrissar (quando jogador toca o chão)
 function ControladorCombate.ProcessarAterrissar(entidade: Model)
 	local maquina = ControladorCombate.ObterMaquina(entidade)
@@ -956,6 +1038,10 @@ local MapaAcoes = {
 	Correr = ControladorCombate.ProcessarCorrer,
 	PararCorrer = ControladorCombate.ProcessarPararCorrer,
 	Aterrissar = ControladorCombate.ProcessarAterrissar,
+	Dash = function(entidade, dados)
+		return ControladorCombate.ProcessarDash(entidade, dados)
+	end,
+	DashTerminou = ControladorCombate.ProcessarDashTerminou,
 	SincronizarMovimento = function(entidade, dados)
 		return ControladorCombate.ProcessarSincronizarMovimento(entidade, dados)
 	end,
