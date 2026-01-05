@@ -53,7 +53,7 @@ ArmasTemplate.ConfiguracaoGlobal = {
 
 	-- Dash/Roll
 	CooldownDash = 1.5, -- Cooldown entre dashes (segundos)
-	ForcaDash = 50, -- Força do impulso sustentado
+	ForcaDash = 45, -- Força do impulso sustentado
 	VelocidadeAnimacaoDash = 1.0, -- Velocidade da animação de dash (0-3)
 }
 
