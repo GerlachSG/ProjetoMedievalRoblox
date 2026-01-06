@@ -96,6 +96,12 @@ ArmasTemplate.Armas = {
 
 			-- Estado
 			Stunado = "rbxassetid://104947799689111",
+
+			-- Interagir com o Mundo (Exclusivo do Base)
+			InteragindoAlto = "rbxassetid://139881462472225",
+			InteragindoBaixo = "rbxassetid://111940476196229",
+			InteragindoChao = "rbxassetid://105611406813057",
+			InteragindoMedio = "rbxassetid://111460345852039",
 		},
 	},
 
@@ -207,35 +213,35 @@ ArmasTemplate.Armas = {
 		-- IDs de animação
 		animacoes = {
 			-- Combate
-			AtaqueLeve = "rbxassetid://99089536362364",
-			AtaquePesado = "rbxassetid://109982570649734",
-			Defesa = "rbxassetid://111460345852039",
-			DefesaQuebrada = "rbxassetid://105611406813057",
-			Aparar = "rbxassetid://0000000000", -- TODO: Adicionar ID
-			Aparado = "rbxassetid://94588265013910",
-			Equipar = "rbxassetid://87283295811902",
-			Desequipar = "rbxassetid://125396593531220",
+			AtaqueLeve = "rbxassetid://80851426931067",
+			AtaquePesado = "rbxassetid://117244978564325",
+			Defesa = "rbxassetid://106963330997976",
+			DefesaQuebrada = "rbxassetid://103742519902549",
+			Aparar = "rbxassetid://129329167930963",
+			Aparado = "rbxassetid://140567046809161",
+			Equipar = "rbxassetid://140710454719042",
+			Desequipar = "rbxassetid://79693751210844",
 
 			-- Movimento Normal
-			Idle = "rbxassetid://139049880951103",
-			Andando = "rbxassetid://104976161284084",
-			Correndo = "rbxassetid://84480325767002",
-			Pulando = "rbxassetid://126513416555386",
-			Caindo = "rbxassetid://120023331153028",
-			Escalando = "rbxassetid://128601601033320",
+			Idle = "rbxassetid://140496395460979",
+			Andando = "rbxassetid://105404528392497",
+			Correndo = "rbxassetid://128600831352375",
+			Pulando = "rbxassetid://93655898591525",
+			Caindo = "rbxassetid://110317645536592",
+			Escalando = "rbxassetid://112833263522484",
 
 			-- Movimento Agachado
-			IdleAgachado = "rbxassetid://0000000000", -- TODO: Adicionar ID
-			AndandoAgachado = "rbxassetid://0000000000", -- TODO: Adicionar ID
+			IdleAgachado = "rbxassetid://113336055232894",
+			AndandoAgachado = "rbxassetid://110248727392186",
 
 			-- Dash
-			DashFrente = "rbxassetid://0000000000", -- TODO: Adicionar ID
-			DashTras = "rbxassetid://0000000000", -- TODO: Adicionar ID
-			DashEsquerda = "rbxassetid://0000000000", -- TODO: Adicionar ID
-			DashDireita = "rbxassetid://0000000000", -- TODO: Adicionar ID
+			DashFrente = "rbxassetid://110380195030160",
+			DashTras = "rbxassetid://137774822058926",
+			DashEsquerda = "rbxassetid://134473715541120",
+			DashDireita = "rbxassetid://118967040484648",
 
 			-- Estado
-			Stunado = "rbxassetid://0000000000", -- TODO: Adicionar ID (ou usa Base)
+			Stunado = "rbxassetid://119175260965936",
 		},
 	},
 
